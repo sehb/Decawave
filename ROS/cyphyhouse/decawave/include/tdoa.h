@@ -24,19 +24,15 @@
 #include <cmath>
 #include <iostream>
 #include <Eigen/Dense>
+#include <Eigen/QR>
 
 #define STATE_X   0
 #define STATE_Y   1
 #define STATE_Z   2
-#define STATE_VX  3
-#define STATE_VY  4
-#define STATE_VZ  5
-#define STATE_DIM 6
+#define STATE_DIM 3
 
 #define MAX_NR_ANCHORS 8
 
-#define MAX_COVARIANCE 100
-#define MIN_COVARIANCE 1e-6f
 
 typedef struct vec3d_s
 {
@@ -50,50 +46,45 @@ class TDOA
 public:
     
     // Contructor
-    TDOA();
-    TDOA(Eigen::MatrixXf transition_mat, Eigen::MatrixXf prediction_mat, Eigen::MatrixXf covariance_mat, vec3d_t init_pos);
+    TDOA(vec3d_t init_pos);
     
     // Set Functions
-    void setTransitionMat(Eigen::MatrixXf transition_mat);
-    void setPredictionMat(Eigen::MatrixXf prediction_mat);
-    void setCovarianceMat(Eigen::MatrixXf covariance_mat);
-    
-    void setAncPosition(int anc_num, vec3d_t anc_pos);
     void setAncPosition(int anc_num, float x, float y, float z);
-    
-    void setStdDev(float sdev);
-    
+    void setAncPosition(int anc_num, vec3d_t anc_pos);
+
+    void setAncDiff();
+
+    void storeTdoaData(uint8_t Ar, uint8_t An, float distanceDiff);
+
     // Update functions
-    void scalarTDOADistUpdate(uint8_t Ar, uint8_t An, float distanceDiff);
-    void stateEstimatorPredict(double dt);
-    void stateEstimatorFinalize();
-    void stateEstimatorAddProcessNoise();
-    
+    void updateF(void);
+    void updateD(void);
+    void updateJ(void);
+    void updateS(void);
+
     
     // Get functions
     vec3d_t getLocation();
-	vec3d_t getVelocity();
+    vec3d_t getVelocity();
     vec3d_t getAncPosition(int anc_num);
     
 private:
     
     //variables
-    uint32_t tdoaCount;
-    uint32_t nr_states;
-    float stdDev;
-    
     vec3d_t anchorPosition[MAX_NR_ANCHORS];
+    float anchorDiff[MAX_NR_ANCHORS];
+    float tdoa_data[MAX_NR_ANCHORS];
     
-    // Matrices used by the kalman filter
-    Eigen::VectorXf S;
-    Eigen::MatrixXf P;
-    Eigen::MatrixXf A;
-    Eigen::MatrixXf Q;
-    
-    //Functions
-    void stateEstimatorScalarUpdate(Eigen::RowVectorXf H, float error, float stdMeasNoise);
-    
-    void PredictionBound();
+    // Matrices
+    Eigen::VectorXf S_prev;
+    Eigen::VectorXf S_curr;
+    Eigen::VectorXf D; // distance bewteen tag and each anchors
+    Eigen::VectorXf F; // f(r) where r = [r_0,prev, ..., r_7,prev]
+    Eigen::MatrixXf J; // Jacobian
+    Eigen::MatrixXf J_inv;
+
+    // Matrix funcs
+    void pinv(Eigen::MatrixXf& pinvmat) const;
 
 };
 

@@ -75,7 +75,7 @@ uint16_t serial_checksum(const uint8_t *data, size_t len)
     return sum2 << 8 | sum1;
 }
 
-void initAnchors(TDOA &ekf)
+void initAnchors(TDOA &tdoa_newton)
 {
     std::string path = ros::package::getPath("decawave");
     std::ifstream file( path+"/config/anchorPos.txt");
@@ -85,9 +85,10 @@ void initAnchors(TDOA &ekf)
     while (std::getline(file, str))
     {
         sscanf(str.c_str(), "%f, %f, %f", &x,&y,&z);
-        ekf.setAncPosition(i, x, y, z);
+        tdoa_newton.setAncPosition(i, x, y, z);
         i++;
     }
+    tdoa_newton.setAncDiff();
 }
 
 void initRobotMatrices(std::string type);
@@ -98,7 +99,7 @@ int main(int argc, char *argv[])
     ros::NodeHandle nh;
     ros::NodeHandle private_handle("~");
     ros::Publisher decaPos_pub = nh.advertise<geometry_msgs::Point>("decaPos", 1);
-	ros::Publisher decaVel_pub = nh.advertise<geometry_msgs::Point>("decaVel", 1);
+    ros::Publisher decaVel_pub = nh.advertise<geometry_msgs::Point>("decaVel", 1);
     
     std::string device_port;
     private_handle.getParam("deca_port", device_port);
@@ -115,11 +116,11 @@ int main(int argc, char *argv[])
     
     vec3d_t initial_position = {0,0,0};
     
-    TDOA deca_ekf(A, P, Q, initial_position);
-    
-    initAnchors(deca_ekf);
+    TDOA tdoa_newton(initial_position);
+    initAnchors(tdoa_newton);
     
     ros::Time last_pub = ros::Time::now();
+    int count_data = 0;
 
     while(ros::ok())
     {
@@ -147,42 +148,44 @@ int main(int argc, char *argv[])
                 if(RX_idx == MSG_SIZE)
                 {
                     uint16_t cs = (serial_msg[MSG_SIZE-2] << 8) | serial_msg[MSG_SIZE-1];
+                    
                     if(cs == serial_checksum(serial_msg, MSG_SIZE-2))
                     {
                         An = serial_msg[ANCN_BYTE];
                         Ar = serial_msg[ANCR_BYTE];
                         tdoaDistDiff = to_float(&serial_msg[DATA_BYTE]);
 
-			            ros::Time t_now = ros::Time::now();
+                        ros::Time t_now = ros::Time::now();
                         ros::Duration t = t_now - last_pub;
-                        if(t.toSec() >= 0.01)
+
+                        //std::cout << "decaNode.cpp: msg recv, An:" << std::to_string(An) << " "
+                        //             "Ar:" << std::to_string(Ar) << std::endl;
+                        tdoa_newton.storeTdoaData(An, Ar, tdoaDistDiff);
+
+
+                        // publish message
+                        if(t.toSec() >= 0.01 && An == 0 && count_data == 8)
                         {
-                            vec3d_t pos = deca_ekf.getLocation();
+                            //std::cout << "decaNode.cpp: publishing msg" << std::endl;
+                            tdoa_newton.updateS();
+                            vec3d_t pos = tdoa_newton.getLocation();
+
                             geometry_msgs::Point pos_msg;
                             pos_msg.x = pos.x;
                             pos_msg.y = pos.y;
                             pos_msg.z = pos.z;
                             decaPos_pub.publish(pos_msg);
-                            
-                            vec3d_t vel = deca_ekf.getVelocity();
-                            geometry_msgs::Point vel_msg;
-                            vel_msg.x = vel.x;
-                            vel_msg.y = vel.y;
-                            vel_msg.z = vel.z;
-                            decaVel_pub.publish(vel_msg);
-                            
-                            last_pub = t_now;
-                            deca_ekf.stateEstimatorPredict(t.toSec());
-			            }
-			            
-			            deca_ekf.stateEstimatorAddProcessNoise();
-			            
-			            deca_ekf.scalarTDOADistUpdate(An, Ar, tdoaDistDiff);
-			            
-			            deca_ekf.stateEstimatorFinalize();
-			            
 
-		            }
+                            last_pub = t_now;
+                        }
+                        
+
+                        // update
+                        if (An == 0)
+                            count_data = 0;
+                        count_data++;
+                        
+                    }
                     
                     else
                     {
@@ -196,10 +199,10 @@ int main(int argc, char *argv[])
                 }
             }
         }
-	else
-	{
-		std::this_thread::sleep_for(std::chrono::microseconds(SLEEP_TIME_MICROS));
-	}
+    else
+    {
+        std::this_thread::sleep_for(std::chrono::microseconds(SLEEP_TIME_MICROS));
+    }
         
     }
     my_serial.close();
