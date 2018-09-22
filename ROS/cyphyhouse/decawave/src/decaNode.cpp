@@ -13,8 +13,13 @@
 #include "geometry_msgs/Point.h"
 #include "ros/package.h"
 
+#define EKF           0
+#define NEWTON        1
+#define ALGORITHM     NEWTON // Set algorithm here: EKF, NEWTON
+
 #include "Eigen/Dense"
-#include "tdoa.h"
+#include "tdoaEkf.h"
+#include "tdoaNewton.h"
 #include "serial/serial.h"
 
 
@@ -28,11 +33,8 @@
 #define DATA_BYTE     3
 #define CS_BYTE       7
 
-
 #define TYPE_TDOA     0xAA
-
 #define SERIAL_BUF_SIZE 32
-
 #define SLEEP_TIME_MICROS 10
 
 uint8_t ignoring_flag = 0;
@@ -45,52 +47,15 @@ Eigen::MatrixXf P;
 Eigen::MatrixXf A;
 Eigen::MatrixXf Q;
 
-
-float to_float(uint8_t* buff)
-{
-    uint16_t char_for_move[2];
-    char_for_move[1] = (buff[0]<<8) | (buff[1]);
-    char_for_move[0] = (buff[2]<<8) | (buff[3]);
-    return(*(float*)(char_for_move));
-}
-
-/* Fletcher checksum, borrowed from wikipedia */
-uint16_t serial_checksum(const uint8_t *data, size_t len)
-{
-    uint16_t sum1 = 0xff, sum2 = 0xff;
-
-    while (len) {
-        unsigned tlen = len > 21 ? 21 : len;
-        len -= tlen;
-        do {
-            sum1 += *data++;
-            sum2 += sum1;
-        } while (--tlen);
-        sum1 = (sum1 & 0xff) + (sum1 >> 8);
-        sum2 = (sum2 & 0xff) + (sum2 >> 8);
-    }
-    /* Second reduction step to reduce sums to 16 bits */
-    sum1 = (sum1 & 0xff) + (sum1 >> 8);
-    sum2 = (sum2 & 0xff) + (sum2 >> 8);
-    return sum2 << 8 | sum1;
-}
-
-void initAnchors(TDOA &ekf)
-{
-    std::string path = ros::package::getPath("decawave");
-    std::ifstream file( path+"/config/anchorPos.txt");
-    std::string str;
-    float x, y, z;
-    int i = 0;
-    while (std::getline(file, str))
-    {
-        sscanf(str.c_str(), "%f, %f, %f", &x,&y,&z);
-        ekf.setAncPosition(i, x, y, z);
-        i++;
-    }
-}
-
+float to_float(uint8_t* buff);
 void initRobotMatrices(std::string type);
+uint16_t serial_checksum(const uint8_t *data, size_t len);
+template <typename deca_class> void initAnchors(deca_class &deca);
+
+void processEkf(TDOAEkf &deca_ekf, ros::Time &last_pub, ros::Time t_now, ros::Duration t, 
+                    ros::Publisher decaPos_pub, ros::Publisher decaVel_pub);
+void processNewton(TDOANewton &deca_newton, int &count_data, ros::Time &last_pub, ros::Time t_now, 
+                    ros::Duration t, ros::Publisher decaPos_pub);
 
 int main(int argc, char *argv[])
 {   
@@ -98,7 +63,8 @@ int main(int argc, char *argv[])
     ros::NodeHandle nh;
     ros::NodeHandle private_handle("~");
     ros::Publisher decaPos_pub = nh.advertise<geometry_msgs::Point>("decaPos", 1);
-	ros::Publisher decaVel_pub = nh.advertise<geometry_msgs::Point>("decaVel", 1);
+    ros::Publisher decaVel_pub = nh.advertise<geometry_msgs::Point>("decaVel", 1);
+	// ros::Publisher decaVel_pub = nh.advertise<geometry_msgs::PointStamped>("decaSPos", 1);
     
     std::string device_port;
     private_handle.getParam("deca_port", device_port);
@@ -115,12 +81,20 @@ int main(int argc, char *argv[])
     
     vec3d_t initial_position = {0,0,0};
     
-    TDOA deca_ekf(A, P, Q, initial_position);
-    
-    initAnchors(deca_ekf);
-    
-    ros::Time last_pub = ros::Time::now();
 
+    #if ALGORITHM == EKF
+        TDOAEkf deca_ekf(A, P, Q, initial_position);
+        initAnchors(deca_ekf);
+
+    #elif ALGORITHM == NEWTON
+        TDOANewton deca_newton(initial_position);
+        initAnchors(deca_newton);
+        int count_data = 0;
+
+    #endif
+    
+
+    ros::Time last_pub = ros::Time::now();
     while(ros::ok())
     {
         bytes_avail = my_serial.available();
@@ -155,35 +129,14 @@ int main(int argc, char *argv[])
 
 			            ros::Time t_now = ros::Time::now();
                         ros::Duration t = t_now - last_pub;
-                        if(t.toSec() >= 0.01)
-                        {
-                            vec3d_t pos = deca_ekf.getLocation();
-                            geometry_msgs::Point pos_msg;
-                            pos_msg.x = pos.x;
-                            pos_msg.y = pos.y;
-                            pos_msg.z = pos.z;
-                            decaPos_pub.publish(pos_msg);
-                            
-                            vec3d_t vel = deca_ekf.getVelocity();
-                            geometry_msgs::Point vel_msg;
-                            vel_msg.x = vel.x;
-                            vel_msg.y = vel.y;
-                            vel_msg.z = vel.z;
-                            decaVel_pub.publish(vel_msg);
-                            
-                            last_pub = t_now;
-                            deca_ekf.stateEstimatorPredict(t.toSec());
-			            }
-			            
-			            deca_ekf.stateEstimatorAddProcessNoise();
-			            
-			            deca_ekf.scalarTDOADistUpdate(An, Ar, tdoaDistDiff);
-			            
-			            deca_ekf.stateEstimatorFinalize();
-			            
+
+                        #if ALGORITHM == EKF
+                            processEkf(deca_ekf, last_pub, t_now, t, decaPos_pub, decaVel_pub);
+                        #elif ALGORITHM == NEWTON
+                            processNewton(deca_newton, count_data, last_pub, t_now, t, decaPos_pub);
+                        #endif
 
 		            }
-                    
                     else
                     {
                         //printf("Error: Wrong checksum. Dump: ");
@@ -196,15 +149,95 @@ int main(int argc, char *argv[])
                 }
             }
         }
-	else
-	{
-		std::this_thread::sleep_for(std::chrono::microseconds(SLEEP_TIME_MICROS));
-	}
-        
+    	else
+    	{
+    		std::this_thread::sleep_for(std::chrono::microseconds(SLEEP_TIME_MICROS));
+    	}
     }
     my_serial.close();
     std::cout << "Closed serial" << std::endl;
 }
+
+
+// EKF calculation sequence and publish to ROS
+void processEkf(TDOAEkf &deca_ekf, ros::Time &last_pub, ros::Time t_now, ros::Duration t, 
+                ros::Publisher decaPos_pub, ros::Publisher decaVel_pub)
+{
+    if(t.toSec() >= 0.01)
+    {
+        vec3d_t pos = deca_ekf.getLocation();
+        geometry_msgs::Point pos_msg;
+        pos_msg.x = pos.x;
+        pos_msg.y = pos.y;
+        pos_msg.z = pos.z;
+        decaPos_pub.publish(pos_msg);
+        
+        vec3d_t vel = deca_ekf.getVelocity();
+        geometry_msgs::Point vel_msg;
+        vel_msg.x = vel.x;
+        vel_msg.y = vel.y;
+        vel_msg.z = vel.z;
+        decaVel_pub.publish(vel_msg);
+        
+        last_pub = t_now;
+        deca_ekf.stateEstimatorPredict(t.toSec());
+    }
+    
+    deca_ekf.stateEstimatorAddProcessNoise();
+    deca_ekf.scalarTDOADistUpdate(An, Ar, tdoaDistDiff);
+    deca_ekf.stateEstimatorFinalize();
+}
+
+
+// Newton's method calculation and publish to ROS
+void processNewton(TDOANewton &deca_newton, int &count_data, ros::Time &last_pub, ros::Time t_now, 
+                    ros::Duration t, ros::Publisher decaPos_pub)
+{
+    //std::cout << "decaNode.cpp: msg recv, An:" << std::to_string(An) << " "
+    //             "Ar:" << std::to_string(Ar) << std::endl;
+    deca_newton.storeTdoaData(An, Ar, tdoaDistDiff);
+
+    // publish message
+    if(t.toSec() >= 0.01 && An == 0 && count_data == 8)
+    {
+        //std::cout << "decaNode.cpp: publishing msg" << std::endl;
+        deca_newton.updateS();
+        vec3d_t pos = deca_newton.getLocation();
+
+        geometry_msgs::Point pos_msg;
+        pos_msg.x = pos.x;
+        pos_msg.y = pos.y;
+        pos_msg.z = pos.z;
+        decaPos_pub.publish(pos_msg);
+
+        last_pub = t_now;
+    }
+
+    // update
+    if (An == 0)
+        count_data = 0;
+    count_data++;
+
+}
+
+template <typename deca_class>
+void initAnchors(deca_class &deca)
+{
+    std::string path = ros::package::getPath("decawave");
+    std::ifstream file( path+"/config/anchorPos_IRL.txt");
+    std::string str;
+    float x, y, z;
+    int i = 0;
+    while (std::getline(file, str))
+    {
+        sscanf(str.c_str(), "%f, %f, %f", &x,&y,&z);
+        deca.setAncPosition(i, x, y, z);
+        i++;
+    }
+    deca.setAncDiff();
+}
+
+
 
 void initRobotMatrices(std::string type)
 {
@@ -254,3 +287,31 @@ void initRobotMatrices(std::string type)
     }
 }
 
+float to_float(uint8_t* buff)
+{
+    uint16_t char_for_move[2];
+    char_for_move[1] = (buff[0]<<8) | (buff[1]);
+    char_for_move[0] = (buff[2]<<8) | (buff[3]);
+    return(*(float*)(char_for_move));
+}
+
+/* Fletcher checksum, borrowed from wikipedia */
+uint16_t serial_checksum(const uint8_t *data, size_t len)
+{
+    uint16_t sum1 = 0xff, sum2 = 0xff;
+
+    while (len) {
+        unsigned tlen = len > 21 ? 21 : len;
+        len -= tlen;
+        do {
+            sum1 += *data++;
+            sum2 += sum1;
+        } while (--tlen);
+        sum1 = (sum1 & 0xff) + (sum1 >> 8);
+        sum2 = (sum2 & 0xff) + (sum2 >> 8);
+    }
+    /* Second reduction step to reduce sums to 16 bits */
+    sum1 = (sum1 & 0xff) + (sum1 >> 8);
+    sum2 = (sum2 & 0xff) + (sum2 >> 8);
+    return sum2 << 8 | sum1;
+}

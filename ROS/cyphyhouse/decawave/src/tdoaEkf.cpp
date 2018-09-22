@@ -15,16 +15,16 @@
  *************************************************/
 
 
-#include "tdoa.h"
+#include "tdoaEkf.h"
 
-TDOA::TDOA(void)
+TDOAEkf::TDOAEkf(void)
 {
     tdoaCount = 0;
-    nr_states = STATE_DIM;
+    nr_states = STATE_DIM_EKF;
     
-    S.setZero(STATE_DIM);
+    S.setZero(STATE_DIM_EKF);
 
-    P.setZero(STATE_DIM, STATE_DIM);
+    P.setZero(STATE_DIM_EKF, STATE_DIM_EKF);
     P(STATE_X, STATE_X) = powf(100,2);
     P(STATE_Y, STATE_Y) = powf(100,2);
     P(STATE_Z, STATE_Z) = powf(100,2);
@@ -32,17 +32,17 @@ TDOA::TDOA(void)
     P(STATE_VY, STATE_VY) = powf(0.01,2);
     P(STATE_VZ, STATE_VZ) = powf(0.01,2);
     
-    A.setIdentity(STATE_DIM,STATE_DIM);
+    A.setIdentity(STATE_DIM_EKF,STATE_DIM_EKF);
     A(STATE_X,STATE_VX) = 0.016;
     A(STATE_Y,STATE_VY) = 0.016;
     A(STATE_Z,STATE_VZ) = 0.016;
     
-    Q.setZero(STATE_DIM, STATE_DIM);
+    Q.setZero(STATE_DIM_EKF, STATE_DIM_EKF);
     
     stdDev = 0.15f;
 }
 
-TDOA::TDOA(Eigen::MatrixXf transition_mat, Eigen::MatrixXf prediction_mat, Eigen::MatrixXf covariance_mat, vec3d_t init_pos)
+TDOAEkf::TDOAEkf(Eigen::MatrixXf transition_mat, Eigen::MatrixXf prediction_mat, Eigen::MatrixXf covariance_mat, vec3d_t init_pos)
 {
     tdoaCount = 0;
     nr_states = transition_mat.rows();
@@ -59,7 +59,7 @@ TDOA::TDOA(Eigen::MatrixXf transition_mat, Eigen::MatrixXf prediction_mat, Eigen
     stdDev = 0.15f;
 }
 
-void TDOA::setTransitionMat(Eigen::MatrixXf transition_mat)
+void TDOAEkf::setTransitionMat(Eigen::MatrixXf transition_mat)
 {
     if( (transition_mat.rows() != nr_states) || (transition_mat.cols() != nr_states) )
     {
@@ -71,7 +71,7 @@ void TDOA::setTransitionMat(Eigen::MatrixXf transition_mat)
 
 }
 
-void TDOA::setPredictionMat(Eigen::MatrixXf prediction_mat)
+void TDOAEkf::setPredictionMat(Eigen::MatrixXf prediction_mat)
 {
     if( (prediction_mat.rows() != nr_states) || (prediction_mat.cols() != nr_states) )
     {
@@ -82,7 +82,7 @@ void TDOA::setPredictionMat(Eigen::MatrixXf prediction_mat)
     P = prediction_mat;
 }
 
-void TDOA::setCovarianceMat(Eigen::MatrixXf covariance_mat)
+void TDOAEkf::setCovarianceMat(Eigen::MatrixXf covariance_mat)
 {
     if( (covariance_mat.rows() != nr_states) || (covariance_mat.cols() != nr_states) )
     {
@@ -93,7 +93,7 @@ void TDOA::setCovarianceMat(Eigen::MatrixXf covariance_mat)
     Q = covariance_mat;
 }
 
-void TDOA::setAncPosition(int anc_num, vec3d_t anc_pos)
+void TDOAEkf::setAncPosition(int anc_num, vec3d_t anc_pos)
 {
     if( (anc_num < 0) || (anc_num > MAX_NR_ANCHORS) )
     {
@@ -104,7 +104,7 @@ void TDOA::setAncPosition(int anc_num, vec3d_t anc_pos)
     anchorPosition[anc_num] = anc_pos;
 }
 
-void TDOA::setAncPosition(int anc_num, float x, float y, float z)
+void TDOAEkf::setAncPosition(int anc_num, float x, float y, float z)
 {
     vec3d_t temp;
     temp.x = x;
@@ -113,17 +113,17 @@ void TDOA::setAncPosition(int anc_num, float x, float y, float z)
     setAncPosition(anc_num, temp);
 }
 
-void TDOA::setStdDev(float sdev)
+void TDOAEkf::setStdDev(float sdev)
 {
     stdDev = sdev;
 }
 
-vec3d_t TDOA::getAncPosition(int anc_num)
+vec3d_t TDOAEkf::getAncPosition(int anc_num)
 {
     return anchorPosition[anc_num];
 }
 
-void TDOA::scalarTDOADistUpdate(uint8_t Ar, uint8_t An, float distanceDiff)
+void TDOAEkf::scalarTDOADistUpdate(uint8_t Ar, uint8_t An, float distanceDiff)
 {
 
     float measurement = distanceDiff;
@@ -142,7 +142,7 @@ void TDOA::scalarTDOADistUpdate(uint8_t Ar, uint8_t An, float distanceDiff)
     float predicted = d1 - d0;
     float error = measurement - predicted;
 
-    Eigen::RowVectorXf h = Eigen::RowVectorXf::Constant(STATE_DIM, 0);
+    Eigen::RowVectorXf h = Eigen::RowVectorXf::Constant(STATE_DIM_EKF, 0);
 
     h(STATE_X) = ((x - x1) / d1 - (x - x0) / d0);
     h(STATE_Y) = ((y - y1) / d1 - (y - y0) / d0);
@@ -152,7 +152,7 @@ void TDOA::scalarTDOADistUpdate(uint8_t Ar, uint8_t An, float distanceDiff)
 
 }
 
-void TDOA::stateEstimatorScalarUpdate(Eigen::RowVectorXf H, float error, float stdMeasNoise)
+void TDOAEkf::stateEstimatorScalarUpdate(Eigen::RowVectorXf H, float error, float stdMeasNoise)
 {
     // The Kalman gain as a column vector
     static Eigen::VectorXf K(nr_states);
@@ -177,7 +177,7 @@ void TDOA::stateEstimatorScalarUpdate(Eigen::RowVectorXf H, float error, float s
     PredictionBound();
 }
 
-void TDOA::stateEstimatorPredict(double dt)
+void TDOAEkf::stateEstimatorPredict(double dt)
 {
     A(STATE_X,STATE_VX) = dt;
     A(STATE_Y,STATE_VY) = dt;
@@ -191,7 +191,7 @@ void TDOA::stateEstimatorPredict(double dt)
     S[STATE_Z] += S[STATE_VZ] * dt;
 }
 
-void TDOA::stateEstimatorFinalize()
+void TDOAEkf::stateEstimatorFinalize()
 {
     // So far nothing happens here
     // Placeholder for future function
@@ -199,7 +199,7 @@ void TDOA::stateEstimatorFinalize()
     PredictionBound();
 }
 
-void TDOA::stateEstimatorAddProcessNoise()
+void TDOAEkf::stateEstimatorAddProcessNoise()
 {
     // Covariance update
     P += Q;
@@ -207,7 +207,7 @@ void TDOA::stateEstimatorAddProcessNoise()
     PredictionBound();
 }
 
-void TDOA::PredictionBound()
+void TDOAEkf::PredictionBound()
 {
     //Ensure boundedness and symmetry of Prediction Matrix
     for (int i=0; i<nr_states; i++) 
@@ -231,7 +231,7 @@ void TDOA::PredictionBound()
     }
 }
 
-vec3d_t TDOA::getLocation(void)
+vec3d_t TDOAEkf::getLocation(void)
 {
     vec3d_t pos;
     pos.x = S(STATE_X);
@@ -244,7 +244,7 @@ vec3d_t TDOA::getLocation(void)
     return pos;
 }
 
-vec3d_t TDOA::getVelocity(void)
+vec3d_t TDOAEkf::getVelocity(void)
 {
     vec3d_t vel;
     vel.x = S(STATE_VX);

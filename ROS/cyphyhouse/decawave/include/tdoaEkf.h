@@ -14,8 +14,8 @@
  *
  *************************************************/
 
-#ifndef _TDOA_h
-#define _TDOA_h
+#ifndef _TDOA_EKF_h
+#define _TDOA_EKF_h
 
 #include <cstdio>
 #include <cstdint>
@@ -25,33 +25,19 @@
 #include <iostream>
 #include <Eigen/Dense>
 
-#define STATE_X   0
-#define STATE_Y   1
-#define STATE_Z   2
-#define STATE_VX  3
-#define STATE_VY  4
-#define STATE_VZ  5
-#define STATE_DIM 6
-
-#define MAX_NR_ANCHORS 8
+#include "definitions.h"
 
 #define MAX_COVARIANCE 100
 #define MIN_COVARIANCE 1e-6f
 
-typedef struct vec3d_s
-{
-    float   x;
-    float   y;
-    float   z;
-}vec3d_t;
 
-class TDOA
+class TDOAEkf
 {
 public:
     
     // Contructor
-    TDOA();
-    TDOA(Eigen::MatrixXf transition_mat, Eigen::MatrixXf prediction_mat, Eigen::MatrixXf covariance_mat, vec3d_t init_pos);
+    TDOAEkf();
+    TDOAEkf(Eigen::MatrixXf transition_mat, Eigen::MatrixXf prediction_mat, Eigen::MatrixXf covariance_mat, vec3d_t init_pos);
     
     // Set Functions
     void setTransitionMat(Eigen::MatrixXf transition_mat);
